@@ -35,6 +35,67 @@ def delete_config():
     if os.path.exists(CONFIG_FILE):
         os.remove(CONFIG_FILE)
 
+# ── ROOT COOKIE EXTRACTION ─────────────────────────────
+
+# Possible locations of Roblox's WebView cookie database
+ROBLOX_COOKIE_PATHS = [
+    "/data/data/com.roblox.client/app_webview/Default/Cookies",
+    "/data/data/com.roblox.client/app_webview/Cookies",
+    "/data/data/com.roblox.client/databases/Cookies",
+]
+
+def has_root():
+    """Check if su is available and working."""
+    try:
+        result = subprocess.run(
+            ["su", "-c", "echo ok"],
+            capture_output=True, text=True, timeout=5
+        )
+        return result.stdout.strip() == "ok"
+    except:
+        return False
+
+def auto_extract_cookie():
+    """Extract .ROBLOSECURITY from Roblox app data using root + sqlite3."""
+    console.print("[dim]Searching for Roblox cookie in app data...[/dim]")
+
+    for db_path in ROBLOX_COOKIE_PATHS:
+        # Check if the file exists first
+        check = subprocess.run(
+            ["su", "-c", f"test -f '{db_path}' && echo yes || echo no"],
+            capture_output=True, text=True, timeout=5
+        )
+        if check.stdout.strip() != "yes":
+            continue
+
+        console.print(f"[dim]Found database at {db_path}[/dim]")
+
+        # Copy to temp location so sqlite3 can read it safely
+        tmp = "/data/local/tmp/roblox_cookies_tmp"
+        subprocess.run(
+            ["su", "-c", f"cp '{db_path}' '{tmp}' && chmod 644 '{tmp}'"],
+            timeout=5
+        )
+
+        try:
+            result = subprocess.run(
+                ["su", "-c", f"sqlite3 '{tmp}' \"SELECT value FROM cookies WHERE name='.ROBLOSECURITY' LIMIT 1\""],
+                capture_output=True, text=True, timeout=10
+            )
+            cookie = result.stdout.strip()
+            # Clean up temp file
+            subprocess.run(["su", "-c", f"rm -f '{tmp}'"], timeout=3)
+
+            if cookie:
+                return cookie
+            else:
+                console.print(f"[yellow][?] Database found but no cookie in it yet.[/yellow]")
+        except Exception as e:
+            console.print(f"[yellow][!] sqlite3 error: {e}[/yellow]")
+            subprocess.run(["su", "-c", f"rm -f '{tmp}'"], timeout=3)
+
+    return None
+
 # ── ROBLOX API ─────────────────────────────────────────
 
 def get_self_from_cookie(cookie: str):
@@ -98,18 +159,14 @@ def is_in_target_game(user_id: str, cookie: str, place_id: str):
 
 def extract_place_id_from_link(link: str):
     match = re.search(r"roblox\.com/games/(\d+)", link)
-    if match:
-        return match.group(1)
-    return None
+    return match.group(1) if match else None
 
 def extract_private_code(link: str):
     match = re.search(r"privateServerLinkCode=([^&\s]+)", link)
     if match:
         return match.group(1)
     match = re.search(r"roblox\.com/share\?code=([^&\s]+)", link)
-    if match:
-        return match.group(1)
-    return None
+    return match.group(1) if match else None
 
 # ── LAUNCH ─────────────────────────────────────────────
 
@@ -149,19 +206,33 @@ def draw_menu():
     table.add_column(style="white")
     table.add_row("1", "Join by  [cyan]Game ID[/cyan]")
     table.add_row("2", "Join by  [magenta]Private Server Link[/magenta]")
-    table.add_row("3", "Switch Account  [dim](clear saved login)[/dim]")
-    table.add_row("4", "[red]Exit[/red]")
+    table.add_row("3", "Refresh Cookie  [dim](re-extract from Roblox app)[/dim]")
+    table.add_row("4", "Switch Account  [dim](clear saved login)[/dim]")
+    table.add_row("5", "[red]Exit[/red]")
     console.print(table)
 
 # ── SETUP ──────────────────────────────────────────────
 
-def prompt_cookie():
-    console.print(Panel(
-        "[bold]Account Setup[/bold]\n"
-        "[dim]Your cookie is saved locally on your device only.[/dim]",
-        border_style="cyan"
-    ))
-    console.print("\n[bold]How to get your .ROBLOSECURITY cookie:[/bold]")
+def get_cookie_auto_or_manual():
+    """Try root extraction first, fall back to manual paste."""
+    root = has_root()
+
+    if root:
+        console.print("[green][✓][/green] Root detected — attempting auto cookie extraction...")
+        cookie = auto_extract_cookie()
+        if cookie:
+            console.print("[green][✓][/green] Cookie extracted automatically!")
+            return cookie
+        else:
+            console.print(
+                "[yellow][!][/yellow] Couldn't find cookie automatically.\n"
+                "[dim]Make sure you've logged into Roblox at least once on this device.[/dim]"
+            )
+    else:
+        console.print("[yellow][!][/yellow] No root detected — falling back to manual entry.")
+
+    # Manual fallback
+    console.print("\n[bold]How to get your .ROBLOSECURITY cookie manually:[/bold]")
     console.print(
         "[dim]  On PC:\n"
         "    1. Go to roblox.com and log in\n"
@@ -172,14 +243,25 @@ def prompt_cookie():
         "    2. Log into roblox.com and open Cookie-Editor\n"
         "    3. Find .ROBLOSECURITY and copy the value[/dim]\n"
     )
+    return Prompt.ask("[cyan]Paste your .ROBLOSECURITY cookie[/cyan]").strip()
 
-    cookie = Prompt.ask("[cyan]Paste your .ROBLOSECURITY cookie[/cyan]").strip()
-    console.print("\n[dim]Fetching your account info...[/dim]")
+def prompt_setup():
+    console.print(Panel(
+        "[bold]Account Setup[/bold]\n"
+        "[dim]Your cookie is saved locally on your device only.[/dim]",
+        border_style="cyan"
+    ))
+    console.print()
+
+    cookie = get_cookie_auto_or_manual()
+    if not cookie:
+        return None, None, None
+
+    console.print("\n[dim]Verifying cookie with Roblox API...[/dim]")
     user_id, username = get_self_from_cookie(cookie)
 
     if not user_id:
         console.print("[red][!] Invalid cookie or couldn't reach Roblox API.[/red]")
-        console.print("[dim]Check your cookie and internet connection.[/dim]")
         time.sleep(3)
         return None, None, None
 
@@ -205,12 +287,24 @@ def setup(skip_banner=False):
             time.sleep(1)
             return config["user_id"], config["username"], config["cookie"]
         else:
-            console.print("[red][!] Saved cookie expired. Please re-enter.[/red]")
+            console.print("[yellow][!][/yellow] Saved cookie expired — re-extracting...")
+            time.sleep(1)
+            # Try to auto re-extract before asking manually
+            if has_root():
+                cookie = auto_extract_cookie()
+                if cookie:
+                    user_id, username = get_self_from_cookie(cookie)
+                    if user_id:
+                        console.print(f"[green][✓][/green] Re-extracted! Logged in as [bold]{username}[/bold]")
+                        save_config(user_id, username, cookie)
+                        time.sleep(1)
+                        return user_id, username, cookie
             delete_config()
+            console.print("[red][!] Could not auto re-extract. Please enter cookie manually.[/red]")
             time.sleep(1)
 
     banner()
-    return prompt_cookie()
+    return prompt_setup()
 
 # ── REJOIN LOOP ────────────────────────────────────────
 
@@ -283,6 +377,26 @@ def flow_private_server(user_id, cookie):
 
     rejoin_loop(user_id, cookie, place_id, private_code)
 
+def flow_refresh_cookie(user_id, username, cookie):
+    """Re-extract cookie from Roblox app data."""
+    console.print("\n[dim]Re-extracting cookie from Roblox app...[/dim]")
+    new_cookie = auto_extract_cookie()
+    if not new_cookie:
+        console.print("[red][!] Could not extract cookie. Is Roblox installed and logged in?[/red]")
+        time.sleep(2)
+        return user_id, username, cookie
+
+    new_user_id, new_username = get_self_from_cookie(new_cookie)
+    if not new_user_id:
+        console.print("[red][!] Extracted cookie appears invalid.[/red]")
+        time.sleep(2)
+        return user_id, username, cookie
+
+    save_config(new_user_id, new_username, new_cookie)
+    console.print(f"[green][✓][/green] Cookie refreshed! Logged in as [bold]{new_username}[/bold]")
+    time.sleep(2)
+    return new_user_id, new_username, new_cookie
+
 # ── MAIN ───────────────────────────────────────────────
 
 def main():
@@ -295,20 +409,22 @@ def main():
         banner(username)
         draw_menu()
         console.print()
-        choice = Prompt.ask("[bold]Choose[/bold]", choices=["1", "2", "3", "4"], default="1")
+        choice = Prompt.ask("[bold]Choose[/bold]", choices=["1", "2", "3", "4", "5"], default="1")
 
         if choice == "1":
             flow_game_id(user_id, cookie)
         elif choice == "2":
             flow_private_server(user_id, cookie)
         elif choice == "3":
+            user_id, username, cookie = flow_refresh_cookie(user_id, username, cookie)
+        elif choice == "4":
             delete_config()
             console.print("[yellow]Saved login cleared.[/yellow]")
             time.sleep(1)
             user_id, username, cookie = setup(skip_banner=True)
             if not user_id:
                 sys.exit(1)
-        elif choice == "4":
+        elif choice == "5":
             console.print("\n[dim]Goodbye![/dim]")
             sys.exit(0)
 
