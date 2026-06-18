@@ -5,7 +5,7 @@ Auto rejoin tool for Roblox, built for Termux on Android.
 ## Install & Run (one command)
 
 ```bash
-curl -sL https://raw.githubusercontent.com/Rekyoki/rekyoki-auto-rejoin/main/auto_rejoin.py -o auto_rejoin.py && pip install rich prompt_toolkit requests -q && python auto_rejoin.py
+curl -sL https://raw.githubusercontent.com/Rekyoki/rekyoki-auto-rejoin/main/auto_rejoin.py -o auto_rejoin.py && pkg install sqlite -y && pip install rich prompt_toolkit requests -q && python auto_rejoin.py
 ```
 
 ## Features
